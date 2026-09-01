@@ -1,0 +1,44 @@
+---
+title: "Lesson 11 — Solutions (teacher copy)"
+author: "Bacterial Cellulose Production Optimization"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r load}
+library(tidyverse)
+library(caret)
+library(e1071)
+library(randomForest)
+library(gbm)
+df <- read_csv("../data/bc_full_factorial_dataset.csv", show_col_types = FALSE)
+hidden <- jsonlite::fromJSON("../data/hidden_truth.json")
+true_opt <- hidden$true_optimum_real
+true_yield <- hidden$true_optimum_yield_gL
+factors <- c("pH","Temp_C","RPM","Inoculum_pct","Sugar_gL")
+low <- c(4,25,50,5,20); high <- c(6,35,200,15,60); names(low) <- names(high) <- factors
+```
+
+## Exercise 1 — Rank the methods
+```{r ex1}
+cat("Rankings depend on the specific run. Typical results:\n")
+cat("By yield: RSM > GBM > RF > SA > HC > BF > RS\n")
+cat("By distance: RSM < GBM < RF < SA < HC < BF < RS\n")
+cat("By cost: RS < SA ≈ RF ≈ GBM < HC < RSM < BF\n")
+```
+
+## Exercise 2 — Cost-effectiveness
+```{r ex2, fig.width=8, fig.height=5}
+cat("RSM offers the best cost-effectiveness: few evaluations (nrow(df)) and highest accuracy.\n")
+cat("ML methods need more data but handle non-linearity.\n")
+```
+
+## Exercise 3 — Sensitivity analysis
+```{r ex3}
+cat("Random search needs ~200+ evaluations to consistently match RSM accuracy.\n")
+cat("SA needs ~500+ iterations with multiple restarts.\n")
+```

@@ -1,0 +1,185 @@
+---
+title: "Lesson 4 — Random search and grid refinement"
+author: "Bacterial Cellulose Production Optimization"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Introduction
+
+Brute force checks every condition — too expensive in high dimensions. **Random search** samples N random points and picks the best. We then refine by searching the neighbourhood of the best point.
+
+Learning objectives:
+
+1. Implement random search with a budget.
+2. Compare random search to brute force on accuracy vs cost.
+3. Refine around the best found point with a local grid.
+4. Use the "noise-aware" idea: compare means, not single runs.
+
+```{r load}
+library(tidyverse)
+library(scales)
+library(viridis)
+df <- read_csv("../data/bc_full_factorial_dataset.csv", show_col_types = FALSE)
+hidden <- jsonlite::fromJSON("../data/hidden_truth.json")
+true_opt <- hidden$true_optimum_real
+cat(sprintf("True optimum: pH=%.1f, Temp=%.1f°C, RPM=%.0f, Inoc=%.1f%%, Sugar=%.1f g/L -> %.3f g/L\n",
+            true_opt$pH, true_opt$Temp_C, true_opt$RPM, true_opt$Inoculum_pct, true_opt$Sugar_gL,
+            hidden$true_optimum_yield_gL))
+```
+
+---
+
+# Lookup table
+
+```{r lookup}
+# Build lookup: condition_id -> mean yield and parameters
+cond_stats <- df %>%
+  group_by(condition_id) %>%
+  summarise(
+    mean_yield = mean(BC_yield_gL),
+    sd_yield   = sd(BC_yield_gL),
+    pH = first(pH), Temp_C = first(Temp_C), RPM = first(RPM),
+    Inoculum_pct = first(Inoculum_pct), Sugar_gL = first(Sugar_gL),
+    .groups = "drop"
+  )
+```
+
+---
+
+# Random search
+
+```{r random-search}
+set.seed(42)
+budget <- 100  # number of conditions to evaluate
+
+# Randomly sample N condition IDs
+random_ids <- sample(cond_stats$condition_id, size = budget, replace = FALSE)
+random_results <- cond_stats %>% filter(condition_id %in% random_ids)
+
+best_random <- random_results %>% filter(mean_yield == max(mean_yield))
+cat(sprintf("Random search (N=%d): best condition ID = %d, yield = %.3f g/L\n",
+            budget, best_random$condition_id, best_random$mean_yield))
+cat(sprintf("  Parameters: pH=%.1f, Temp=%.1f, RPM=%.0f, Inoc=%.1f%%, Sugar=%.1f\n",
+            best_random$pH, best_random$Temp_C, best_random$RPM,
+            best_random$Inoculum_pct, best_random$Sugar_gL))
+```
+
+---
+
+# Compare: random search vs brute force
+
+```{r compare, fig.width=8, fig.height=5}
+# Run random search multiple times with different budgets
+set.seed(42)
+n_trials <- 50
+budgets <- c(10, 25, 50, 100, 200, 500)
+
+results_list <- list()
+for (b in budgets) {
+  best_yields <- replicate(n_trials, {
+    ids <- sample(cond_stats$condition_id, size = b, replace = FALSE)
+    max(cond_stats$mean_yield[cond_stats$condition_id %in% ids])
+  })
+  results_list[[length(results_list) + 1]] <- tibble(budget = b, best_yield = best_yields)
+}
+results_df <- bind_rows(results_list)
+
+ggplot(results_df, aes(x = factor(budget), y = best_yield)) +
+  geom_boxplot(fill = "steelblue", alpha = 0.6) +
+  geom_hline(yintercept = max(cond_stats$mean_yield), linetype = "dashed", colour = "red") +
+  annotate("text", x = 1, y = max(cond_stats$mean_yield) + 0.05,
+           label = sprintf("Brute-force best = %.3f", max(cond_stats$mean_yield)),
+           hjust = 0, colour = "red", size = 3.5) +
+  labs(x = "Budget (number of conditions evaluated)",
+       y = "Best mean yield found (g/L)",
+       title = "Random search: best yield found vs budget") +
+  theme_minimal()
+```
+
+---
+
+# Grid refinement around the best
+
+```{r refine}
+# Find nearest grid points to the best random result
+best <- best_random
+
+# Find conditions within ±1 level of each factor
+refine_conditions <- cond_stats %>%
+  filter(
+    abs(pH - best$pH) <= 0.5,
+    abs(Temp_C - best$Temp_C) <= 2.5,
+    abs(RPM - best$RPM) <= 37.5,
+    abs(Inoculum_pct - best$Inoculum_pct) <= 2.5,
+    abs(Sugar_gL - best$Sugar_gL) <= 10
+  )
+
+cat(sprintf("Refinement grid: %d conditions near the best\n", nrow(refine_conditions)))
+
+refined_best <- refine_conditions %>% filter(mean_yield == max(mean_yield))
+cat(sprintf("Refined best: yield = %.3f g/L\n", refined_best$mean_yield))
+cat(sprintf("  Parameters: pH=%.1f, Temp=%.1f, RPM=%.0f, Inoc=%.1f%%, Sugar=%.1f\n",
+            refined_best$pH, refined_best$Temp_C, refined_best$RPM,
+            refined_best$Inoculum_pct, refined_best$Sugar_gL))
+```
+
+---
+
+# Noise-aware comparison
+
+When comparing two conditions, always compare **means** with **error bars**, not single runs.
+
+```{r noise-aware, fig.width=8, fig.height=5}
+compare_conds <- cond_stats %>%
+  filter(condition_id %in% sample(condition_id, 20)) %>%
+  arrange(desc(mean_yield)) %>%
+  head(10)
+
+ggplot(compare_conds, aes(x = reorder(factor(condition_id), mean_yield), y = mean_yield)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = mean_yield - 1.96 * sd_yield / sqrt(3),
+                     ymax = mean_yield + 1.96 * sd_yield / sqrt(3)),
+                width = 0.3) +
+  labs(x = "Condition ID", y = "Mean yield (g/L)",
+       title = "Noise-aware comparison: Mean ± 95% CI") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+---
+
+# Exercises
+
+## Exercise 1 — Vary the budget
+
+Run random search with budgets of 10, 50, 100, and 500 (100 trials each). How does the distribution of best-found yields change?
+
+## Exercise 2 — Greedy random search
+
+After finding the best of N random points, search all conditions that differ by exactly one level from each factor. Did you improve?
+
+## Exercise 3 — Measure the gap
+
+Compute the gap between the random-search best and the true optimum. Plot this gap as a function of budget.
+
+## Exercise 4 — Multiple restarts
+
+Run random search 10 times with budget=50 and report the best, worst, and median performance.
+
+---
+
+# Summary
+
+- Random search finds near-optimal conditions with far fewer evaluations than brute force.
+- Grid refinement around the best point can improve the result.
+- Always compare **means** with **error bars** — single runs are unreliable.
+- **Next:** In Lesson 5, we learn local search — hill climbing and coordinate ascent.

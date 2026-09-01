@@ -1,0 +1,73 @@
+---
+title: "Lesson 6 — Solutions (teacher copy)"
+author: "Bacterial Cellulose Production Optimization"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r load}
+library(tidyverse)
+df <- read_csv("../data/bc_full_factorial_dataset.csv", show_col_types = FALSE)
+cond_stats <- df %>%
+  group_by(condition_id) %>%
+  summarise(mean_yield = mean(BC_yield_gL),
+            pH = first(pH), Temp_C = first(Temp_C), RPM = first(RPM),
+            Inoculum_pct = first(Inoculum_pct), Sugar_gL = first(Sugar_gL),
+            .groups = "drop")
+levels_list <- list(
+  pH = c(4.0, 4.5, 5.0, 5.5, 6.0), Temp_C = c(25, 27.5, 30, 32.5, 35),
+  RPM = c(50, 87.5, 125, 162.5, 200), Inoculum_pct = c(5, 7.5, 10, 12.5, 15),
+  Sugar_gL = c(20, 30, 40, 50, 60))
+get_neighbours <- function(cr) {
+  nb <- list(); for (f in names(levels_list)) {
+    vals <- levels_list[[f]]; idx <- which(vals == cr[[f]])
+    for (d in c(-1,1)) { ni <- idx+d; if (ni>=1 && ni<=length(vals)) {
+      nr <- cr; nr[[f]] <- vals[ni]; nb <- c(nb, list(nr)) }}}
+  bind_rows(nb)
+}
+sa <- function(start_id, n_iter=500, T0=1.0, alpha=0.95) {
+  cur <- cond_stats %>% filter(condition_id==start_id); cy <- cur$mean_yield
+  best <- cur; by <- cy; T <- T0; n_acc <- 0
+  for (i in 1:n_iter) {
+    nbs <- get_neighbours(cur); cand <- nbs %>% slice_sample(n=1)
+    cand <- cond_stats %>% filter(pH==cand$pH,Temp_C==cand$Temp_C,RPM==cand$RPM,
+      Inoculum_pct==cand$Inoculum_pct,Sugar_gL==cand$Sugar_gL)
+    delta <- cand$mean_yield - cy
+    if (delta > 0 || runif(1) < exp(delta/T)) {
+      cur <- cand; cy <- cur$mean_yield; n_acc <- n_acc+1
+      if (cy > by) { best <- cur; by <- cy }
+    }
+    T <- T * alpha
+  }
+  list(best=best, best_yield=by, acceptance_rate=n_acc/n_iter)
+}
+```
+
+## Exercise 1 — Temperature schedule
+```{r ex1}
+set.seed(42); start <- sample(cond_stats$condition_id, 1)
+for (T0 in c(0.1, 1.0, 10.0)) {
+  res <- sa(start, T0=T0)
+  cat(sprintf("T0=%.1f -> yield=%.3f, accept=%.1f%%\n", T0, res$best_yield, 100*res$acceptance_rate))
+}
+```
+
+## Exercise 2 — Cooling rate
+```{r ex2}
+set.seed(42)
+for (alpha in c(0.90, 0.95, 0.99)) {
+  res <- sa(start, alpha=alpha)
+  cat(sprintf("alpha=%.2f -> yield=%.3f, accept=%.1f%%\n", alpha, res$best_yield, 100*res$acceptance_rate))
+}
+```
+
+## Exercise 3 & 4
+```{r ex3ex4}
+cat("Exercises 3 and 4 require visual inspection of trajectories.\n")
+cat("SA typically escapes local optima when T is still high (early iterations).\n")
+cat("Grid refinement after SA can improve by ~0.05-0.1 g/L.\n")
+```

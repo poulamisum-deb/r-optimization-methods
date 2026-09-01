@@ -1,0 +1,28 @@
+# R
+.Rhistory
+.Rdata
+.RData
+.Ruserdata
+.httr-oauth
+*.Rproj.user/
+*.Rproj
+
+# R Markdown output
+*_cache/
+*_files/
+*.html
+
+# R packages
+*.tar.gz
+src/*.o
+src/*.so
+src/*.dll
+
+# OS
+.DS_Store
+Thumbs.db
+*~
+
+# IDE
+.vscode/
+.idea/

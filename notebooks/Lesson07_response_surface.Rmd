@@ -1,0 +1,219 @@
+---
+title: "Lesson 7 — RSM: multiple linear regression"
+author: "Bacterial Cellulose Production Optimization"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Introduction
+
+Search methods find good points. **Response Surface Methodology (RSM)** builds a statistical *model* of the yield surface, then uses calculus to find the optimum. This is the "aha" moment: we can predict yields we never measured.
+
+Learning objectives:
+
+1. Build a quadratic regression model with `lm()`.
+2. Interpret coefficients, R², and ANOVA.
+3. Use canonical analysis to find the stationary point.
+4. Predict the optimum and visualise the fitted surface.
+
+```{r load}
+library(tidyverse)
+library(scales)
+library(viridis)
+library(car)
+df <- read_csv("../data/bc_full_factorial_dataset.csv", show_col_types = FALSE)
+```
+
+---
+
+# Code the factors
+
+RSM works best in coded units [-1, +1].
+
+```{r coding}
+factors <- c("pH", "Temp_C", "RPM", "Inoculum_pct", "Sugar_gL")
+low  <- c(4.0, 25, 50, 5, 20)
+high <- c(6.0, 35, 200, 15, 60)
+names(low) <- names(high) <- factors
+
+# Create coded columns
+df_coded <- df
+for (f in factors) {
+  df_coded[[paste0(f, "_coded")]] <- 2 * (df[[f]] - low[f]) / (high[f] - low[f]) - 1
+}
+```
+
+---
+
+# Build the quadratic model
+
+```{r quadratic-model}
+# Quadratic formula: y ~ linear + interactions + quadratic
+model <- lm(BC_yield_gL ~
+  pH_coded + Temp_C_coded + RPM_coded + Inoculum_pct_coded + Sugar_gL_coded +
+  pH_coded:Temp_C_coded + Sugar_gL_coded:RPM_coded +
+  I(pH_coded^2) + I(Temp_C_coded^2) + I(RPM_coded^2) +
+  I(Inoculum_pct_coded^2) + I(Sugar_gL_coded^2),
+  data = df_coded
+)
+
+summary(model)
+```
+
+---
+
+# Interpret the model
+
+## R² and adjusted R²
+
+```{r r-squared}
+cat(sprintf("R² = %.4f\n", summary(model)$r.squared))
+cat(sprintf("Adjusted R² = %.4f\n", summary(model)$adj.r.squared))
+cat(sprintf("Residual SE = %.4f\n", summary(model)$sigma))
+```
+
+## Coefficients
+
+```{r coefficients}
+coefs <- tidy(model)  # from broom if available, otherwise manual
+coefs_table <- data.frame(
+  Term = names(coef(model)),
+  Estimate = coef(model),
+  StdError = summary(model)$coefficients[, 2],
+  tValue = summary(model)$coefficients[, 3],
+  pValue = summary(model)$coefficients[, 4]
+)
+print(coefs_table)
+```
+
+## ANOVA
+
+```{r anova}
+aov_result <- anova(model)
+print(aov_result)
+```
+
+---
+
+# Find the optimum: canonical analysis
+
+The stationary point of the quadratic is where ∂y/∂x = 0.
+
+```{r canonical}
+# Extract coefficients for coded factors
+b <- coef(model)
+# Linear terms
+b_lin <- c(b["pH_coded"], b["Temp_C_coded"], b["RPM_coded"],
+           b["Inoculum_pct_coded"], b["Sugar_gL_coded"])
+
+# Quadratic terms (halved, since model uses I(x^2) not 0.5*x^2)
+b_quad <- c(b["I(pH_coded^2)"], b["I(Temp_C_coded^2)"], b["I(RPM_coded^2)"],
+            b["I(Inoculum_pct_coded^2)"], b["I(Sugar_gL_coded^2)"])
+
+# Interaction terms
+b_pH_T <- b["pH_coded:Temp_C_coded"]
+b_S_R  <- b["Sugar_gL_coded:RPM_coded"]
+
+# Build Hessian matrix A (2*quadratic coefficients on diagonal, interactions off-diagonal)
+A <- matrix(0, 5, 5)
+diag(A) <- 2 * b_quad
+A[1, 2] <- A[2, 1] <- b_pH_T
+A[4, 5] <- A[5, 4] <- b_S_R
+
+# Stationary point: x* = -A^{-1} * b_lin / 2
+x_star <- -solve(A, b_lin) / 2
+
+cat("Stationary point (coded):\n")
+for (i in 1:5) cat(sprintf("  %s: %.4f\n", factors[i], x_star[i]))
+
+# Convert to real units
+real_star <- low + (x_star + 1) * (high - low) / 2
+cat("\nStationary point (real units):\n")
+for (i in 1:5) cat(sprintf("  %s: %.3f\n", factors[i], real_star[i]))
+
+# Predicted yield at optimum
+new_data <- data.frame(
+  pH_coded = x_star[1], Temp_C_coded = x_star[2], RPM_coded = x_star[3],
+  Inoculum_pct_coded = x_star[4], Sugar_gL_coded = x_star[5]
+)
+pred_opt <- predict(model, newdata = new_data)
+cat(sprintf("\nPredicted optimum yield: %.3f g/L\n", pred_opt))
+```
+
+---
+
+# Check if it's a maximum
+
+```{r eigencheck}
+eigen_vals <- eigen(A)$values
+cat("Eigenvalues of Hessian:\n")
+print(eigen_vals)
+if (all(eigen_vals < 0)) {
+  cat("All eigenvalues negative -> stationary point is a MAXIMUM\n")
+} else if (all(eigen_vals > 0)) {
+  cat("All eigenvalues positive -> stationary point is a MINIMUM\n")
+} else {
+  cat("Mixed eigenvalues -> SADDLE POINT (not a true optimum)\n")
+}
+```
+
+---
+
+# Visualise the fitted surface
+
+```{r fitted-surface, fig.width=10, fig.height=6}
+# pH vs Temperature surface
+grid <- expand.grid(
+  pH_coded = seq(-1, 1, length.out = 50),
+  Temp_C_coded = seq(-1, 1, length.out = 50),
+  RPM_coded = 0, Inoculum_pct_coded = 0, Sugar_gL_coded = 0
+)
+grid$pred_yield <- predict(model, newdata = grid)
+
+ggplot(grid, aes(x = pH_coded, y = Temp_C_coded, fill = pred_yield)) +
+  geom_tile() +
+  scale_fill_viridis_c() +
+  geom_point(data = df_coded, aes(x = pH_coded, y = Temp_C_coded),
+             inherit.aes = FALSE, size = 0.3, alpha = 0.3) +
+  labs(x = "pH (coded)", y = "Temperature (coded)", fill = "Predicted yield (g/L)",
+       title = "Fitted response surface: pH vs Temperature") +
+  theme_minimal()
+```
+
+---
+
+# Exercises
+
+## Exercise 1 — Fit without interactions
+
+Remove the interaction terms. How does R² change? Is the change significant?
+
+## Exercise 2 — Back-transform your model
+
+Write the quadratic model in real (decoded) units. What are the real-unit coefficients?
+
+## Exercise 3 — Residual diagnostics
+
+Plot residuals vs fitted values, QQ plot, and Cook's distance. Are there any concerning patterns?
+
+## Exercise 4 — Predict condition 2000
+
+Use your model to predict the mean yield at condition_id = 2000. Compare with the actual data.
+
+---
+
+# Summary
+
+- RSM fits a quadratic model to all data, then uses calculus to find the optimum.
+- `lm()` in R handles quadratic + interaction terms with `I(x^2)` and `:`.
+- ANOVA tells us which terms are significant.
+- Canonical analysis finds the stationary point.
+- **Next:** In Lesson 8, we compare each method's prediction to the true optimum — the "truth reveal."

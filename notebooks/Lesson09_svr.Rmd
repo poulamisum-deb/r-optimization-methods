@@ -1,0 +1,149 @@
+---
+title: "Lesson 9 — Support Vector Regression (SVR)"
+author: "Bacterial Cellulose Production Optimization"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Introduction
+
+RSM assumes a quadratic form. **SVR** is a non-parametric surrogate that can capture more complex patterns. It fits within an "epsilon-tube" around the data.
+
+Learning objectives:
+
+1. Understand why scaling matters for SVR.
+2. Train SVR with linear and RBF kernels.
+3. Tune hyperparameters (C, epsilon, gamma) with cross-validation.
+4. Use SVR as a surrogate to optimise yield.
+
+```{r load}
+library(tidyverse)
+library(scales)
+library(e1071)
+library(caret)
+df <- read_csv("../data/bc_full_factorial_dataset.csv", show_col_types = FALSE)
+hidden <- jsonlite::fromJSON("../data/hidden_truth.json")
+true_opt <- hidden$true_optimum_real
+```
+
+---
+
+# Prepare data
+
+```{r prepare}
+factors <- c("pH", "Temp_C", "RPM", "Inoculum_pct", "Sugar_gL")
+cond_means <- df %>%
+  group_by(across(all_of(factors))) %>%
+  summarise(mean_yield = mean(BC_yield_gL), .groups = "drop")
+
+# Scale features (SVR uses distances — scaling is essential)
+preproc <- preProcess(cond_means[, factors], method = c("center", "scale"))
+cond_scaled <- predict(preproc, cond_means[, factors])
+cond_scaled$yield <- cond_means$mean_yield
+
+# Train/test split
+set.seed(42)
+train_idx <- createDataPartition(cond_scaled$yield, p = 0.8, list = FALSE)
+train <- cond_scaled[train_idx, ]
+test <- cond_scaled[-train_idx, ]
+cat(sprintf("Train: %d, Test: %d\n", nrow(train), nrow(test)))
+```
+
+---
+
+# Linear SVR
+
+```{r linear-svr}
+svr_linear <- svm(yield ~ ., data = train, kernel = "linear", cost = 1, epsilon = 0.1)
+pred_linear <- predict(svr_linear, newdata = test)
+rmse_linear <- sqrt(mean((test$yield - pred_linear)^2))
+r2_linear <- cor(test$yield, pred_linear)^2
+cat(sprintf("Linear SVR: RMSE = %.4f, R² = %.4f\n", rmse_linear, r2_linear))
+```
+
+---
+
+# RBF (Radial) SVR
+
+```{r rbf-svr}
+svr_rbf <- svm(yield ~ ., data = train, kernel = "radial", cost = 10, gamma = 0.5, epsilon = 0.1)
+pred_rbf <- predict(svr_rbf, newdata = test)
+rmse_rbf <- sqrt(mean((test$yield - pred_rbf)^2))
+r2_rbf <- cor(test$yield, pred_rbf)^2
+cat(sprintf("RBF SVR: RMSE = %.4f, R² = %.4f\n", rmse_rbf, r2_rbf))
+```
+
+---
+
+# Cross-validated tuning
+
+```{r cv-tune, fig.width=8, fig.height=5}
+tuned <- tune.svm(yield ~ ., data = train,
+                  gamma = 10^(-3:1), cost = 10^(-1:2),
+                  epsilon = 0.05)
+cat("Best parameters:\n")
+print(tuned$best.parameters)
+
+best_svr <- tuned$best.model
+pred_tuned <- predict(best_svr, newdata = test)
+rmse_tuned <- sqrt(mean((test$yield - pred_tuned)^2))
+r2_tuned <- cor(test$yield, pred_tuned)^2
+cat(sprintf("Tuned RBF SVR: RMSE = %.4f, R² = %.4f\n", rmse_tuned, r2_tuned))
+```
+
+---
+
+# SVR as surrogate for optimisation
+
+```{r optimise}
+# Predict on a fine grid
+grid <- expand.grid(
+  pH = seq(4, 6, by = 0.1),
+  Temp_C = seq(25, 35, by = 0.5),
+  RPM = seq(50, 200, by = 10),
+  Inoculum_pct = seq(5, 15, by = 1),
+  Sugar_gL = seq(20, 60, by = 5)
+)
+
+# Scale grid the same way
+grid_scaled <- predict(preproc, grid)
+grid$pred_yield <- predict(best_svr, newdata = grid_scaled)
+
+best_grid <- grid %>% filter(pred_yield == max(pred_yield))
+cat(sprintf("SVR optimum: pH=%.1f, Temp=%.1f, RPM=%.0f, Inoc=%.1f, Sugar=%.0f -> %.3f g/L\n",
+            best_grid$pH, best_grid$Temp_C, best_grid$RPM,
+            best_grid$Inoculum_pct, best_grid$Sugar_gL, best_grid$pred_yield))
+```
+
+---
+
+# Exercises
+
+## Exercise 1 — Compare kernels
+Train SVR with linear, polynomial (degree 2, 3), and RBF kernels. Compare RMSE on the test set.
+
+## Exercise 2 — Feature importance
+Use permutation importance: shuffle one feature at a time and measure RMSE increase.
+
+## Exercise 3 — Observed vs predicted
+Make an observed-vs-predicted scatter plot with the 1:1 line.
+
+## Exercise 4 — SVR vs RSM
+Compare SVR and RSM on RMSE and R². Which is better? Why?
+
+---
+
+# Summary
+
+- SVR fits within an epsilon-tube and can capture non-linear patterns.
+- **Scaling is essential** — the kernel measures distances.
+- Cross-validation tunes hyperparameters without overfitting.
+- **Next:** In Lesson 10, we try Random Forest and Gradient Boosting — ensemble ML methods.

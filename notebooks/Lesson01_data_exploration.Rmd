@@ -1,0 +1,466 @@
+---
+title: "Lesson 1 — R, tidyverse, and plots with the BC dataset"
+author: "Bacterial Cellulose Production Optimization"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Introduction
+
+You are a bioprocess engineer learning to code. Over this course we will use **R** to answer one question: **what conditions give the maximum bacterial cellulose (BC) yield?**
+
+This lesson gives you the fundamentals you need for everything that follows:
+
+1. **R basics** — variables, vectors, lists, functions, control flow.
+2. **tidyverse** — loading and analysing real data tables with `dplyr` and `readr`.
+3. **Plotting** — turning numbers into pictures with `ggplot2`.
+
+Work through every cell. When you see **Exercise**, write the code yourself. You will make mistakes — that is the point of dry coding practice.
+
+---
+
+# How to use this notebook (2 minutes)
+
+- Press **Shift+Enter** to run a cell and move to the next one.
+- A cell's output appears underneath it.
+- New cells: **Insert > R code cell**.
+- If you get stuck, read the error message — R tells you the *line* of the problem. Errors are your friend; fix and re-run.
+
+---
+
+# Load the data
+
+```{r load-packages}
+library(tidyverse)   # dplyr, ggplot2, readr, tidyr, purrr, stringr
+library(scales)
+```
+
+```{r load-data}
+df <- read_csv("../data/bc_full_factorial_dataset.csv", show_col_types = FALSE)
+cat(sprintf("Loaded dataset: %d rows x %d columns\n", nrow(df), ncol(df)))
+```
+
+---
+
+# Part 1 — R basics (the dry stuff)
+
+Everything in R is a *value* with a *type*. You store values in *variables* and use *functions* to transform them.
+
+## 1.1 Variables and types
+
+```{r variables}
+# integers, doubles, strings, logicals
+experiment <- 12L          # integer (note the L suffix)
+ph         <- 5.5          # double (numeric)
+medium     <- "Hestrin"    # character
+worked     <- TRUE         # logical
+
+cat(experiment, class(experiment), "\n")
+cat(ph, class(ph), "\n")
+cat(medium, class(medium), "\n")
+cat(worked, class(worked), "\n")
+```
+
+**What happened?**
+
+| Step | Code | Variable | Type |
+|------|------|----------|------|
+| 1 | `experiment <- 12L` | `experiment` | integer |
+| 2 | `ph <- 5.5` | `ph` | double |
+| 3 | `medium <- "Hestrin"` | `medium` | character |
+| 4 | `worked <- TRUE` | `worked` | logical |
+
+In R, the `<-` arrow is the assignment operator (like `=` in Python).
+
+## 1.2 Arithmetic and formatted output
+
+```{r arithmetic}
+sugar_gL  <- 50.0
+volume_L  <- 2.0
+yield_gL  <- 8.1
+
+total_sugar_g    <- sugar_gL * volume_L
+yield_per_sugar  <- yield_gL / sugar_gL
+
+cat(sprintf("Total sugar added: %.1f g\n", total_sugar_g))
+cat(sprintf("Yield per g of sugar: %.4f g/g\n", yield_per_sugar))
+```
+
+## 1.3 Vectors — holding many values
+
+Your three replicates of one condition are a **vector**. R uses 1-based indexing.
+
+```{r vectors}
+reps <- c(7.9, 8.2, 8.3)
+cat("vector:", reps, "\n")
+cat("first replicate (index 1):", reps[1], "\n")
+cat("last replicate (index 3):", reps[length(reps)], "\n")
+cat("first two (slice 1:2):", reps[1:2], "\n")
+cat("length:", length(reps), "\n")
+```
+
+**Key difference from Python:** R indices start at **1**, not 0.
+
+## 1.4 Lists — holding mixed types
+
+Lists can hold anything — numbers, strings, even other lists.
+
+```{r lists}
+condition <- list(
+  condition_id = 2168,
+  pH = 5.5,
+  Temp_C = 30.0,
+  RPM = 87.5,
+  Inoculum_pct = 12.5,
+  Sugar_gL = 40.0
+)
+
+cat(condition$pH, condition$Sugar_gL, "\n")
+str(condition)  # shows structure
+```
+
+## 1.5 Loops — repeat without copying
+
+A `for` loop visits every element of a vector.
+
+```{r loops}
+# Mean by hand
+total <- 0
+for (y in reps) {
+  total <- total + y
+}
+mean_val <- total / length(reps)
+cat(sprintf("mean of %s = %.3f\n", paste(reps, collapse=", "), mean_val))
+
+# Loop with an index
+for (i in seq_along(reps)) {
+  cat(sprintf("replicate %d: %.2f g/L\n", i, reps[i]))
+}
+```
+
+**Step-by-step trace of the loop:**
+
+| Iteration | Code | `y` | `total` |
+|-----------|------|-----|---------|
+| 1 | `total <- 0 + 7.9` | 7.9 | 7.9 |
+| 2 | `total <- 7.9 + 8.2` | 8.2 | 16.1 |
+| 3 | `total <- 16.1 + 8.3` | 8.3 | 24.4 |
+
+Then `mean_val = 24.4 / 3 = 8.133`.
+
+## 1.6 Functions — package a job
+
+Functions turn a repeated job into one named step. Define once, call many times. **This is the single most useful habit in coding.**
+
+```{r functions}
+mean_manual <- function(values) {
+  "Return the arithmetic mean of a numeric vector."
+  total <- 0
+  for (v in values) {
+    total <- total + v
+  }
+  return(total / length(values))
+}
+
+cell_yield <- function(sugar_gL, conversion) {
+  "Estimate BC yield from sugar and a conversion factor."
+  return(sugar_gL * conversion)
+}
+
+cat("mean:", mean_manual(reps), "\n")
+cat("yield at 50 g/L sugar:", cell_yield(50.0, 0.16), "\n")
+```
+
+**Difference between *defining* and *calling*:**
+
+| Expression | What it does |
+|-----------|--------------|
+| `mean_manual <- function(values) { ... }` | **Defines** the function — stores the recipe |
+| `mean_manual(reps)` | **Calls** the function — runs the recipe with `reps` |
+
+## 1.7 Making decisions — if / else / else if
+
+Bioprocessors make decisions (raise pH, slow agitation...). So does code.
+
+```{r if-else}
+classify <- function(yield_gL) {
+  if (yield_gL >= 8.0) {
+    return("excellent")
+  } else if (yield_gL >= 5.0) {
+    return("good")
+  } else {
+    return("poor")
+  }
+}
+
+for (y in c(8.4, 6.1, 2.9)) {
+  cat(sprintf("%.1f g/L -> %s\n", y, classify(y)))
+}
+```
+
+---
+
+# Part 2 — tidyverse: real data in tables
+
+The tidyverse is the workhorse of R data analysis. Its core objects are **tibbles** (data frames) and **verbs** (dplyr functions).
+
+## 2.1 Look at the table
+
+```{r head-tail}
+head(df, 3)
+```
+
+```{r tail}
+tail(df, 3)
+```
+
+```{r dim}
+cat("Dimensions:", dim(df), "\n")
+```
+
+```{r glimpse}
+glimpse(df)
+```
+
+```{r summary}
+summary(df)
+```
+
+## 2.2 Filter rows
+
+```{r filter}
+high <- df %>% filter(BC_yield_gL >= 7.0)
+cat(sprintf("%d runs reached >= 7 g/L = %.2f%% of all runs\n",
+            nrow(high), 100 * nrow(high) / nrow(df)))
+
+very_high <- df %>% filter(BC_yield_gL >= 8.0)
+cat(sprintf("%d runs reached >= 8 g/L = %.2f%% of all runs\n",
+            nrow(very_high), 100 * nrow(very_high) / nrow(df)))
+```
+
+## 2.3 Group and summarise
+
+```{r group-summarise}
+cond_means <- df %>%
+  group_by(condition_id) %>%
+  summarise(
+    BC_yield_gL = mean(BC_yield_gL),
+    pH          = first(pH),
+    Temp_C      = first(Temp_C),
+    RPM         = first(RPM),
+    Inoculum_pct = first(Inoculum_pct),
+    Sugar_gL    = first(Sugar_gL),
+    .groups = "drop"
+  )
+
+cat(sprintf("Unique conditions: %d\n", nrow(cond_means)))
+head(cond_means, 3)
+```
+
+## 2.4 Summarise by factor
+
+```{r summarise-by-factor}
+df %>%
+  group_by(pH) %>%
+  summarise(mean_yield = mean(BC_yield_gL), .groups = "drop")
+```
+
+## 2.5 Two-factor grouping
+
+```{r two-factor}
+pivot <- df %>%
+  group_by(pH, Temp_C) %>%
+  summarise(mean_yield = mean(BC_yield_gL), .groups = "drop") %>%
+  arrange(desc(mean_yield))
+
+cat("Top 5 (pH, Temp) combinations by mean yield:\n")
+print(head(pivot, 5))
+```
+
+---
+
+# Part 3 — Plotting with ggplot2
+
+`ggplot2` builds plots layer by layer: data → aesthetics → geometry → theme.
+
+## 3.1 Scatter plot: yield vs temperature, coloured by pH
+
+```{r scatter-plot, fig.width=8, fig.height=5}
+ggplot(cond_means, aes(x = Temp_C, y = BC_yield_gL, colour = pH)) +
+  geom_point(size = 2, alpha = 0.7) +
+  scale_colour_viridis_c() +
+  labs(
+    x = "Temperature (°C)",
+    y = "BC yield (g/L)",
+    title = "Mean BC yield vs temperature, coloured by pH"
+  ) +
+  theme_minimal()
+```
+
+**What happened?**
+
+| Layer | Code | Purpose |
+|-------|------|---------|
+| Data | `ggplot(cond_means, ...)` | Start with condition means |
+| Aesthetics | `aes(x = Temp_C, y = BC_yield_gL, colour = pH)` | Map columns to visual properties |
+| Geometry | `geom_point(size = 2, alpha = 0.7)` | Draw scatter points |
+| Scale | `scale_colour_viridis_c()` | Use viridis colour palette |
+| Labels | `labs(...)` | Add axis labels and title |
+| Theme | `theme_minimal()` | Clean background |
+
+## 3.2 Histogram of yields
+
+```{r histogram, fig.width=8, fig.height=4}
+ggplot(df, aes(x = BC_yield_gL)) +
+  geom_histogram(bins = 50, fill = "steelblue", colour = "white", alpha = 0.8) +
+  labs(
+    x = "BC yield (g/L)",
+    y = "Count",
+    title = "Distribution of BC yields across all runs"
+  ) +
+  theme_minimal()
+```
+
+## 3.3 Box plot by pH
+
+```{r boxplot, fig.width=8, fig.height=5}
+ggplot(df, aes(x = factor(pH), y = BC_yield_gL, fill = factor(pH))) +
+  geom_boxplot(alpha = 0.7, show.legend = FALSE) +
+  scale_fill_viridis_d() +
+  labs(
+    x = "pH",
+    y = "BC yield (g/L)",
+    title = "BC yield distribution by pH level"
+  ) +
+  theme_minimal()
+```
+
+## 3.4 Faceted plot: yield vs sugar for each temperature
+
+```{r facets, fig.width=10, fig.height=6}
+ggplot(cond_means, aes(x = Sugar_gL, y = BC_yield_gL, colour = factor(pH))) +
+  geom_point(alpha = 0.7) +
+  facet_wrap(~Temp_C, labeller = label_both) +
+  scale_colour_viridis_d() +
+  labs(
+    x = "Sugar concentration (g/L)",
+    y = "BC yield (g/L)",
+    title = "Yield vs sugar, faceted by temperature",
+    colour = "pH"
+  ) +
+  theme_minimal()
+```
+
+---
+
+# Exercises
+
+## Exercise 1 — Manually average the triplicates (pure R)
+
+Pick `condition_id == 2168`. Filter the dataframe to those three rows, put the three yields into a numeric vector, and compute the mean and the standard deviation **with a `for` loop** (no `mean()` or `sd()`). Then check yourself with `mean()` and `sd()`.
+
+*Hint: standard deviation = sqrt( sum((x - mean)^2) / (n - 1) ).*
+
+```{r ex1, eval=FALSE}
+# Your code here
+
+```
+
+---
+
+## Exercise 2 — Boolean filtering
+
+How many individual runs reached a yield of **7 g/L or more**? What fraction of the 9375 runs is that? Then repeat for the stricter threshold `>= 8`.
+
+```{r ex2, eval=FALSE}
+# Your code here
+
+```
+
+---
+
+## Exercise 3 — Write a function
+
+Write a function `mean_yield_by_level(factor_name, level)` that returns the mean `BC_yield_gL` for all runs where that factor equals the given level. Call it for every pH level and print the results as a table.
+
+*Hint: `df %>% filter(!!sym(factor_name) == level) %>% pull(BC_yield_gL) %>% mean()`.*
+
+```{r ex3, eval=FALSE}
+# Your code here
+
+```
+
+---
+
+## Exercise 4 — Two-factor grouping
+
+Use `group_by` on **both** pH and temperature to compute the mean yield for every (pH, Temp) combination. Which combination gives the highest mean yield? Print the top 5.
+
+```{r ex4, eval=FALSE}
+# Your code here
+
+```
+
+---
+
+## Exercise 5 — Colourful scatter plot
+
+Make a scatter plot of **yield vs temperature**, but colour the points by the pH level. Add axis labels, a title, and use the viridis colour scale. Save the figure with `ggsave("my_first_plot.png", width=8, height=5, dpi=150)`.
+
+```{r ex5, eval=FALSE}
+# Your code here
+
+```
+
+---
+
+## Exercise 6 (challenge) — The same job with base R only
+
+Re-derive the analysis *without tidyverse*: use `read.csv()` to load `bc_full_factorial_dataset.csv`, accumulate the sum and count of yield per `condition_id` in a named vector (or list), compute the mean, and find the condition with the maximum mean yield. Compare with the tidyverse result.
+
+*Hint: `tapply(df$BC_yield_gL, df$condition_id, mean)` does the group-by in one line.*
+
+```{r ex6, eval=FALSE}
+# Your code here
+
+```
+
+---
+
+# Summary
+
+In this lesson you learned:
+
+**R fundamentals:**
+
+- Assignment with `<-`
+- Data types: integer, double, character, logical
+- Vectors with `c()`, indexing with `[1]`
+- Lists with `list()`, accessing with `$`
+- `for` loops and `if`/`else`
+- Defining and calling functions
+
+**tidyverse:**
+
+- `read_csv()` to load data
+- `filter()`, `select()`, `mutate()` to manipulate
+- `group_by()` + `summarise()` to aggregate
+- `arrange()` to sort
+- Piping with `%>%`
+
+**ggplot2:**
+
+- `ggplot(data, aes(...))` + `geom_*()` to build plots
+- `scale_colour_viridis_c()` for colour scales
+- `facet_wrap()` for small multiples
+- `labs()` and `theme_minimal()` for labels and styling
+
+**Next:** In Lesson 2, we learn why triplicates matter — we will explore measurement noise, compute standard errors, and build honest confidence intervals.

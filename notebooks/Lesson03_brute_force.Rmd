@@ -1,0 +1,193 @@
+---
+title: "Lesson 3 — Brute-force search"
+author: "Bacterial Cellulose Production Optimization"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Introduction
+
+Now that we understand the data, we can formalise our question: **what is the optimal operating condition?** The simplest approach is to check every single condition and pick the best one. This is **brute-force search**.
+
+Learning objectives:
+
+1. Formalise the maximisation problem.
+2. Build a lookup-table `evaluate()` function with an evaluation counter.
+3. Search all 3125 conditions with `which.max`.
+4. Visualise the response surface as a heatmap.
+5. Understand the "curse of dimensionality."
+
+```{r load}
+library(tidyverse)
+library(scales)
+library(viridis)
+df <- read_csv("../data/bc_full_factorial_dataset.csv", show_col_types = FALSE)
+```
+
+---
+
+# The optimisation problem
+
+$$\max_{pH, T, RPM, Ino, Sugar} \; \text{BC yield}(pH, T, RPM, Ino, Sugar)$$
+
+Subject to:
+- pH ∈ [4.0, 6.0]
+- Temp ∈ [25, 35] °C
+- RPM ∈ [50, 200]
+- Inoculum ∈ [5, 15] %
+- Sugar ∈ [20, 60] g/L
+
+---
+
+# A lookup-table evaluate() function
+
+```{r evaluate}
+# Build a lookup from condition_id to mean yield
+eval_counter <- 0
+
+evaluate <- function(condition_id) {
+  eval_counter <<- eval_counter + 1  # <<- modifies the global variable
+  cond <- df %>% filter(condition_id == !!condition_id)
+  return(mean(cond$BC_yield_gL))
+}
+```
+
+---
+
+# Brute-force search
+
+```{r brute-force}
+# Get all unique conditions
+conditions <- unique(df$condition_id)
+
+# Evaluate every condition
+results <- tibble(
+  condition_id = conditions,
+  mean_yield = sapply(conditions, evaluate)
+)
+
+cat(sprintf("Evaluated %d conditions\n", nrow(results)))
+
+# Find the best
+best <- results %>% filter(mean_yield == max(mean_yield))
+cat(sprintf("Best condition: ID = %d, mean yield = %.3f g/L\n",
+            best$condition_id, best$mean_yield))
+
+# Show the parameters of the best condition
+best_params <- df %>%
+  filter(condition_id == best$condition_id) %>%
+  slice(1) %>%
+  select(pH, Temp_C, RPM, Inoculum_pct, Sugar_gL)
+print(best_params)
+```
+
+---
+
+# Curse of dimensionality
+
+How does the cost scale with the number of factors and levels?
+
+```{r curse-of-dim}
+L <- 5  # levels per factor
+factors <- 1:10
+conditions <- L^factors
+
+tibble(Factors = factors, Conditions = conditions) %>%
+  ggplot(aes(x = Factors, y = Conditions)) +
+  geom_col(fill = "firebrick", alpha = 0.7) +
+  scale_y_log10(labels = comma) +
+  labs(x = "Number of factors", y = "Number of conditions (log scale)",
+       title = "Curse of dimensionality: 5^F grows exponentially") +
+  theme_minimal()
+```
+
+---
+
+# Visualise the response surface
+
+## Heatmap: pH vs Temperature
+
+```{r heatmap-ph-temp}
+heatmap_data <- df %>%
+  group_by(pH, Temp_C) %>%
+  summarise(mean_yield = mean(BC_yield_gL), .groups = "drop")
+
+ggplot(heatmap_data, aes(x = pH, y = Temp_C, fill = mean_yield)) +
+  geom_tile() +
+  scale_fill_viridis_c() +
+  labs(x = "pH", y = "Temperature (°C)", fill = "Yield (g/L)",
+       title = "Mean BC yield: pH vs Temperature") +
+  theme_minimal()
+```
+
+## Heatmap: Sugar vs RPM
+
+```{r heatmap-sugar-rpm}
+heatmap2 <- df %>%
+  group_by(Sugar_gL, RPM) %>%
+  summarise(mean_yield = mean(BC_yield_gL), .groups = "drop")
+
+ggplot(heatmap2, aes(x = Sugar_gL, y = RPM, fill = mean_yield)) +
+  geom_tile() +
+  scale_fill_viridis_c() +
+  labs(x = "Sugar (g/L)", y = "RPM", fill = "Yield (g/L)",
+       title = "Mean BC yield: Sugar vs RPM") +
+  theme_minimal()
+```
+
+---
+
+# Exercises
+
+## Exercise 1 — Find the worst condition
+
+Find the condition with the **lowest** mean yield. What are its parameters?
+
+```{r ex1, eval=FALSE}
+# Your code here
+
+```
+
+## Exercise 2 — Cost of brute force
+
+If we had 10 factors with 10 levels each, how many conditions would we need to evaluate? How long would it take at 1 ms per evaluation?
+
+```{r ex2, eval=FALSE}
+# Your code here
+
+```
+
+## Exercise 3 — Top 10 conditions
+
+Print the top 10 conditions with their parameters and mean yields.
+
+```{r ex3, eval=FALSE}
+# Your code here
+
+```
+
+## Exercise 4 — 3D-ish heatmap
+
+Create a faceted heatmap where each facet is a different (RPM, Inoculum) combination, showing yield as pH vs Sugar.
+
+```{r ex4, eval=FALSE}
+# Your code here
+
+```
+
+---
+
+# Summary
+
+- Brute-force search is simple but scales exponentially (curse of dimensionality).
+- `which.max()` gives the best condition in one line.
+- Heatmaps help visualise multi-factor response surfaces.
+- **Next:** In Lesson 4, we learn random search — sampling N random points and refining around the best.

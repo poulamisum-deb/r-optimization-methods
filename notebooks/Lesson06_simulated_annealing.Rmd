@@ -1,0 +1,233 @@
+---
+title: "Lesson 6 — Global search: simulated annealing"
+author: "Bacterial Cellulose Production Optimization"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Introduction
+
+Hill climbing gets stuck in local optima. **Simulated annealing (SA)** escapes them by accepting worse moves with a probability that decreases over time — like cooling molten metal.
+
+Learning objectives:
+
+1. Implement simulated annealing from scratch.
+2. Understand the temperature schedule and acceptance probability.
+3. Visualise the SA trajectory and acceptance rate.
+4. Compare SA to hill climbing and brute force.
+
+```{r load}
+library(tidyverse)
+library(scales)
+library(viridis)
+df <- read_csv("../data/bc_full_factorial_dataset.csv", show_col_types = FALSE)
+hidden <- jsonlite::fromJSON("../data/hidden_truth.json")
+true_opt <- hidden$true_optimum_real
+
+cond_stats <- df %>%
+  group_by(condition_id) %>%
+  summarise(
+    mean_yield = mean(BC_yield_gL),
+    pH = first(pH), Temp_C = first(Temp_C), RPM = first(RPM),
+    Inoculum_pct = first(Inoculum_pct), Sugar_gL = first(Sugar_gL),
+    .groups = "drop"
+  )
+
+levels_list <- list(
+  pH = c(4.0, 4.5, 5.0, 5.5, 6.0), Temp_C = c(25, 27.5, 30, 32.5, 35),
+  RPM = c(50, 87.5, 125, 162.5, 200), Inoculum_pct = c(5, 7.5, 10, 12.5, 15),
+  Sugar_gL = c(20, 30, 40, 50, 60)
+)
+
+get_neighbours <- function(cond_row) {
+  neighbours <- list()
+  for (f in names(levels_list)) {
+    vals <- levels_list[[f]]
+    idx <- which(vals == cond_row[[f]])
+    for (delta in c(-1, 1)) {
+      new_idx <- idx + delta
+      if (new_idx >= 1 && new_idx <= length(vals)) {
+        new_row <- cond_row; new_row[[f]] <- vals[new_idx]
+        neighbours <- c(neighbours, list(new_row))
+      }
+    }
+  }
+  bind_rows(neighbours)
+}
+```
+
+---
+
+# Simulated annealing from scratch
+
+```{r sa-function}
+simulated_annealing <- function(start_id, n_iter = 500, T0 = 1.0, alpha = 0.95) {
+  current <- cond_stats %>% filter(condition_id == start_id)
+  current_yield <- current$mean_yield
+  best <- current
+  best_yield <- current_yield
+
+  T <- T0
+  history <- tibble(step = 0, yield = current_yield, temperature = T, accepted = TRUE)
+  n_accepted <- 0
+
+  for (i in 1:n_iter) {
+    # Pick a random neighbour
+    neighbours <- get_neighbours(current)
+    candidate <- neighbours %>% slice_sample(n = 1)
+    candidate <- cond_stats %>%
+      filter(pH == candidate$pH, Temp_C == candidate$Temp_C, RPM == candidate$RPM,
+             Inoculum_pct == candidate$Inoculum_pct, Sugar_gL == candidate$Sugar_gL)
+
+    delta <- candidate$mean_yield - current_yield
+
+    # Accept if better, or with probability exp(delta / T) if worse
+    if (delta > 0 || runif(1) < exp(delta / T)) {
+      current <- candidate
+      current_yield <- current$mean_yield
+      accepted <- TRUE
+      n_accepted <- n_accepted + 1
+      if (current_yield > best_yield) {
+        best <- current
+        best_yield <- current_yield
+      }
+    } else {
+      accepted <- FALSE
+    }
+
+    # Cool down
+    T <- T * alpha
+    history <- bind_rows(history, tibble(step = i, yield = current_yield,
+                                         temperature = T, accepted = accepted))
+  }
+
+  return(list(best = best, best_yield = best_yield, history = history,
+              acceptance_rate = n_accepted / n_iter))
+}
+```
+
+---
+
+# Run simulated annealing
+
+```{r run-sa}
+set.seed(42)
+start_id <- sample(cond_stats$condition_id, 1)
+sa_result <- simulated_annealing(start_id, n_iter = 500, T0 = 1.0, alpha = 0.95)
+
+cat(sprintf("Simulated annealing from condition %d:\n", start_id))
+cat(sprintf("  Best yield: %.3f g/L\n", sa_result$best_yield))
+cat(sprintf("  Best params: pH=%.1f, Temp=%.1f, RPM=%.0f, Inoc=%.1f%%, Sugar=%.1f\n",
+            sa_result$best$pH, sa_result$best$Temp_C, sa_result$best$RPM,
+            sa_result$best$Inoculum_pct, sa_result$best$Sugar_gL))
+cat(sprintf("  Acceptance rate: %.1f%%\n", 100 * sa_result$acceptance_rate))
+```
+
+---
+
+# Visualise the SA trajectory
+
+```{r sa-trajectory, fig.width=10, fig.height=6}
+p1 <- ggplot(sa_result$history, aes(x = step, y = yield)) +
+  geom_line(colour = "steelblue", linewidth = 0.6) +
+  geom_point(aes(colour = accepted), size = 1) +
+  scale_colour_manual(values = c("TRUE" = "steelblue", "FALSE" = "firebrick")) +
+  labs(x = "Iteration", y = "Current yield (g/L)",
+       title = "SA trajectory: blue=accepted, red=rejected") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+p2 <- ggplot(sa_result$history, aes(x = step, y = temperature)) +
+  geom_line(colour = "orange", linewidth = 0.8) +
+  labs(x = "Iteration", y = "Temperature",
+       title = "Temperature cooling schedule") +
+  theme_minimal()
+
+library(patchwork)
+p1 / p2
+```
+
+---
+
+# Multiple restarts: SA vs Hill Climbing
+
+```{r compare-methods, fig.width=8, fig.height=5}
+set.seed(42)
+n_restarts <- 30
+
+sa_yields <- numeric(n_restarts)
+hc_yields <- numeric(n_restarts)
+
+for (i in 1:n_restarts) {
+  start <- sample(cond_stats$condition_id, 1)
+  # SA
+  sa <- simulated_annealing(start, n_iter = 300, T0 = 1.0, alpha = 0.95)
+  sa_yields[i] <- sa$best_yield
+  # Hill climb (same start)
+  current <- cond_stats %>% filter(condition_id == start)
+  for (s in 1:100) {
+    matched <- get_neighbours(current) %>%
+      left_join(cond_stats %>% select(pH, Temp_C, RPM, Inoculum_pct, Sugar_gL, ny = mean_yield),
+                by = c("pH","Temp_C","RPM","Inoculum_pct","Sugar_gL"))
+    best_n <- matched %>% filter(ny == max(ny, na.rm = TRUE))
+    if (best_n$ny > current$mean_yield) {
+      current <- cond_stats %>% filter(pH == best_n$pH, Temp_C == best_n$Temp_C,
+        RPM == best_n$RPM, Inoculum_pct == best_n$Inoculum_pct, Sugar_gL == best_n$Sugar_gL)
+    } else break
+  }
+  hc_yields[i] <- current$mean_yield
+}
+
+comp <- bind_rows(
+  tibble(method = "Simulated Annealing", yield = sa_yields),
+  tibble(method = "Hill Climbing", yield = hc_yields)
+)
+
+ggplot(comp, aes(x = method, y = yield, fill = method)) +
+  geom_boxplot(alpha = 0.6) +
+  geom_hline(yintercept = max(cond_stats$mean_yield), linetype = "dashed", colour = "red") +
+  annotate("text", x = 1.5, y = max(cond_stats$mean_yield) + 0.03,
+           label = sprintf("Brute-force best = %.3f", max(cond_stats$mean_yield)),
+           hjust = 0.5, colour = "red", size = 3.5) +
+  labs(x = "", y = "Best yield found (g/L)",
+       title = "SA vs Hill Climbing: best yield over 30 restarts") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+---
+
+# Exercises
+
+## Exercise 1 — Temperature schedule
+
+Try T0 = 0.1, 1.0, and 10.0 with alpha = 0.95. How does the initial temperature affect the search?
+
+## Exercise 2 — Cooling rate
+
+Compare alpha = 0.90, 0.95, and 0.99. Which cools fastest? Which finds the best optimum?
+
+## Exercise 3 — SA trajectory
+
+Plot the SA trajectory for a run that clearly escapes a local optimum. Mark the escape point.
+
+## Exercise 4 — SA + refinement
+
+Run SA, then do grid refinement around the final best. Does it improve?
+
+---
+
+# Summary
+
+- Simulated annealing accepts worse moves with probability exp(Δ/T), allowing escape from local optima.
+- The temperature schedule controls exploration vs exploitation.
+- SA generally outperforms hill climbing on multi-modal landscapes.
+- **Next:** In Lesson 7, we switch from search to **model-based** approaches — response surface methodology (RSM).

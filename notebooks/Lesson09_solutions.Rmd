@@ -1,0 +1,56 @@
+---
+title: "Lesson 9 — Solutions (teacher copy)"
+author: "Bacterial Cellulose Production Optimization"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r load}
+library(tidyverse)
+library(e1071)
+library(caret)
+df <- read_csv("../data/bc_full_factorial_dataset.csv", show_col_types = FALSE)
+factors <- c("pH", "Temp_C", "RPM", "Inoculum_pct", "Sugar_gL")
+cond_means <- df %>% group_by(across(all_of(factors))) %>%
+  summarise(mean_yield = mean(BC_yield_gL), .groups = "drop")
+preproc <- preProcess(cond_means[, factors], method = c("center", "scale"))
+cond_scaled <- predict(preproc, cond_means[, factors])
+cond_scaled$yield <- cond_means$mean_yield
+set.seed(42)
+train_idx <- createDataPartition(cond_scaled$yield, p = 0.8, list = FALSE)
+train <- cond_scaled[train_idx, ]; test <- cond_scaled[-train_idx, ]
+```
+
+## Exercise 1 — Compare kernels
+```{r ex1}
+results <- data.frame()
+for (k in c("linear", "polynomial", "radial")) {
+  if (k == "polynomial") {
+    m <- svm(yield ~ ., data = train, kernel = k, degree = 2, cost = 1)
+  } else {
+    m <- svm(yield ~ ., data = train, kernel = k, cost = 1)
+  }
+  p <- predict(m, newdata = test)
+  rmse <- sqrt(mean((test$yield - p)^2))
+  r2 <- cor(test$yield, p)^2
+  results <- rbind(results, data.frame(kernel = k, RMSE = rmse, R2 = r2))
+}
+print(results)
+```
+
+## Exercise 2 — Feature importance
+```{r ex2}
+base_rmse <- sqrt(mean((test$yield - predict(best_svr, newdata = test))^2))
+importance <- data.frame()
+for (f in factors) {
+  test_shuff <- test
+  test_shuff[[f]] <- sample(test_shuff[[f]])
+  p <- predict(best_svr, newdata = test_shuff)
+  importance <- rbind(importance, data.frame(feature = f, rmse_increase = sqrt(mean((test$yield - p)^2)) - base_rmse))
+}
+print(importance %>% arrange(desc(rmse_increase)))
+```

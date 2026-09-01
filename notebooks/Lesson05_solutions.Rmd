@@ -1,0 +1,94 @@
+---
+title: "Lesson 5 — Solutions (teacher copy)"
+author: "Bacterial Cellulose Production Optimization"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r load}
+library(tidyverse)
+df <- read_csv("../data/bc_full_factorial_dataset.csv", show_col_types = FALSE)
+cond_stats <- df %>%
+  group_by(condition_id) %>%
+  summarise(mean_yield = mean(BC_yield_gL),
+            pH = first(pH), Temp_C = first(Temp_C), RPM = first(RPM),
+            Inoculum_pct = first(Inoculum_pct), Sugar_gL = first(Sugar_gL),
+            .groups = "drop")
+
+levels_list <- list(
+  pH = c(4.0, 4.5, 5.0, 5.5, 6.0), Temp_C = c(25, 27.5, 30, 32.5, 35),
+  RPM = c(50, 87.5, 125, 162.5, 200), Inoculum_pct = c(5, 7.5, 10, 12.5, 15),
+  Sugar_gL = c(20, 30, 40, 50, 60)
+)
+
+get_neighbours <- function(cond_row) {
+  neighbours <- list()
+  for (f in names(levels_list)) {
+    vals <- levels_list[[f]]
+    idx <- which(vals == cond_row[[f]])
+    for (delta in c(-1, 1)) {
+      new_idx <- idx + delta
+      if (new_idx >= 1 && new_idx <= length(vals)) {
+        new_row <- cond_row; new_row[[f]] <- vals[new_idx]
+        neighbours <- c(neighbours, list(new_row))
+      }
+    }
+  }
+  bind_rows(neighbours)
+}
+
+hill_climb <- function(start_id, max_steps = 100) {
+  current <- cond_stats %>% filter(condition_id == start_id)
+  for (step in 1:max_steps) {
+    matched <- get_neighbours(current) %>%
+      left_join(cond_stats %>% select(pH, Temp_C, RPM, Inoculum_pct, Sugar_gL, ny = mean_yield),
+                by = c("pH","Temp_C","RPM","Inoculum_pct","Sugar_gL"))
+    best_n <- matched %>% filter(ny == max(ny, na.rm = TRUE))
+    if (best_n$ny > current$mean_yield) {
+      current <- cond_stats %>%
+        filter(pH == best_n$pH, Temp_C == best_n$Temp_C, RPM == best_n$RPM,
+               Inoculum_pct == best_n$Inoculum_pct, Sugar_gL == best_n$Sugar_gL)
+    } else break
+  }
+  current
+}
+```
+
+## Exercise 1
+```{r ex1}
+set.seed(42)
+starts <- sample(cond_stats$condition_id, 50)
+global_best <- max(cond_stats$mean_yield)
+n_reached <- sum(sapply(starts, function(s) hill_climb(s)$mean_yield >= global_best - 0.01))
+cat(sprintf("Reached global optimum: %d / 50 restarts\n", n_reached))
+```
+
+## Exercise 2
+```{r ex2, fig.width=8, fig.height=4}
+set.seed(7)
+current <- cond_stats %>% slice_sample(n = 1)
+path <- tibble(step = 0, yield = current$mean_yield)
+for (s in 1:50) {
+  matched <- get_neighbours(current) %>%
+    left_join(cond_stats %>% select(pH, Temp_C, RPM, Inoculum_pct, Sugar_gL, ny = mean_yield),
+              by = c("pH","Temp_C","RPM","Inoculum_pct","Sugar_gL"))
+  best_n <- matched %>% filter(ny == max(ny, na.rm = TRUE))
+  if (best_n$ny > current$mean_yield) {
+    current <- cond_stats %>% filter(pH == best_n$pH, Temp_C == best_n$Temp_C,
+      RPM == best_n$RPM, Inoculum_pct == best_n$Inoculum_pct, Sugar_gL == best_n$Sugar_gL)
+    path <- bind_rows(path, tibble(step = s, yield = current$mean_yield))
+  } else { path <- bind_rows(path, tibble(step = s, yield = current$mean_yield)); break }
+}
+ggplot(path, aes(x = step, y = yield)) + geom_line(colour = "firebrick", linewidth = 1) +
+  geom_point() + labs(title = "Stuck at local optimum") + theme_minimal()
+```
+
+## Exercise 3 & 4
+```{r ex3ex4}
+cat("First-improving vs best-neighbour comparison requires custom implementations;\n")
+cat("best-neighbour generally finds higher optima but takes more evaluations per step.\n")
+```

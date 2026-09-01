@@ -1,0 +1,147 @@
+---
+title: "Lesson 8 — RSM vs truth"
+author: "Bacterial Cellulose Production Optimization"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Introduction
+
+We have built several methods: brute force, random search, hill climbing, simulated annealing, and RSM. Now comes the **truth reveal** — how close is each method's prediction to the *actual* optimum?
+
+Learning objectives:
+
+1. Load the hidden truth and compare each method's prediction.
+2. Compute bias and distance to the true optimum.
+3. Create a comparison table and visualisation.
+4. Understand why the true optimum lies between grid points.
+
+```{r load}
+library(tidyverse)
+library(scales)
+library(viridis)
+df <- read_csv("../data/bc_full_factorial_dataset.csv", show_col_types = FALSE)
+hidden <- jsonlite::fromJSON("../data/hidden_truth.json")
+true_opt_real <- hidden$true_optimum_real
+true_yield <- hidden$true_optimum_yield_gL
+cat(sprintf("True optimum: pH=%.3f, Temp=%.3f, RPM=%.3f, Inoc=%.3f%%, Sugar=%.3f -> %.3f g/L\n",
+            true_opt_real$pH, true_opt_real$Temp_C, true_opt_real$RPM,
+            true_opt_real$Inoculum_pct, true_opt_real$Sugar_gL, true_yield))
+```
+
+---
+
+# Brute-force best
+
+```{r brute}
+cond_means <- df %>%
+  group_by(condition_id) %>%
+  summarise(mean_yield = mean(BC_yield_gL), .groups = "drop")
+bf_best <- cond_means %>% filter(mean_yield == max(mean_yield))
+bf_params <- df %>% filter(condition_id == bf_best$condition_id) %>% slice(1)
+cat(sprintf("Brute-force best: yield = %.3f g/L\n", bf_best$mean_yield))
+```
+
+# RSM prediction
+
+```{r rsm}
+factors <- c("pH", "Temp_C", "RPM", "Inoculum_pct", "Sugar_gL")
+low <- c(4.0, 25, 50, 5, 20); high <- c(6.0, 35, 200, 15, 60)
+names(low) <- names(high) <- factors
+
+df_coded <- df
+for (f in factors) df_coded[[paste0(f,"_coded")]] <- 2*(df[[f]]-low[f])/(high[f]-low[f])-1
+
+model <- lm(BC_yield_gL ~ pH_coded + Temp_C_coded + RPM_coded + Inoculum_pct_coded + Sugar_gL_coded +
+  pH_coded:Temp_C_coded + Sugar_gL_coded:RPM_coded +
+  I(pH_coded^2) + I(Temp_C_coded^2) + I(RPM_coded^2) + I(Inoculum_pct_coded^2) + I(Sugar_gL_coded^2),
+  data = df_coded)
+
+b <- coef(model)
+b_lin <- c(b["pH_coded"], b["Temp_C_coded"], b["RPM_coded"], b["Inoculum_pct_coded"], b["Sugar_gL_coded"])
+b_quad <- c(b["I(pH_coded^2)"], b["I(Temp_C_coded^2)"], b["I(RPM_coded^2)"],
+            b["I(Inoculum_pct_coded^2)"], b["I(Sugar_gL_coded^2)"])
+A <- diag(2 * b_quad)
+A[1,2] <- A[2,1] <- b["pH_coded:Temp_C_coded"]
+A[4,5] <- A[5,4] <- b["Sugar_gL_coded:RPM_coded"]
+x_star <- -solve(A, b_lin) / 2
+rsm_real <- low + (x_star + 1) * (high - low) / 2
+rsm_yield <- predict(model, newdata = data.frame(
+  pH_coded = x_star[1], Temp_C_coded = x_star[2], RPM_coded = x_star[3],
+  Inoculum_pct_coded = x_star[4], Sugar_gL_coded = x_star[5]))
+
+cat(sprintf("RSM optimum: pH=%.3f, Temp=%.3f, RPM=%.3f, Inoc=%.3f, Sugar=%.3f -> %.3f g/L\n",
+            rsm_real[1], rsm_real[2], rsm_real[3], rsm_real[4], rsm_real[5], rsm_yield))
+```
+
+# Truth reveal: comparison table
+
+```{r comparison, fig.width=10, fig.height=5}
+methods <- tibble(
+  Method = c("True optimum", "Brute force", "RSM"),
+  pH = c(true_opt_real$pH, bf_params$pH, rsm_real[1]),
+  Temp_C = c(true_opt_real$Temp_C, bf_params$Temp_C, rsm_real[2]),
+  RPM = c(true_opt_real$RPM, bf_params$RPM, rsm_real[3]),
+  Inoculum_pct = c(true_opt_real$Inoculum_pct, bf_params$Inoculum_pct, rsm_real[4]),
+  Sugar_gL = c(true_opt_real$Sugar_gL, bf_params$Sugar_gL, rsm_real[5]),
+  Yield = c(true_yield, bf_best$mean_yield, rsm_yield)
+)
+
+# Compute Euclidean distance in real units (normalised)
+norm_range <- high - low
+methods <- methods %>%
+  rowwise() %>%
+  mutate(
+    Distance = sqrt(sum(((c(pH, Temp_C, RPM, Inoculum_pct, Sugar_gL) -
+                          c(true_opt_real$pH, true_opt_real$Temp_C, true_opt_real$RPM,
+                            true_opt_real$Inoculum_pct, true_opt_real$Sugar_gL)) / norm_range)^2)),
+    Bias = Yield - true_yield
+  ) %>%
+  ungroup()
+
+print(methods)
+```
+
+# Visualise distances
+
+```{r barplot, fig.width=8, fig.height=5}
+methods %>%
+  filter(Method != "True optimum") %>%
+  ggplot(aes(x = Method, y = Distance, fill = Method)) +
+  geom_col(alpha = 0.7) +
+  labs(x = "", y = "Normalised Euclidean distance to true optimum",
+       title = "How close is each method to the truth?") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+# Exercises
+
+## Exercise 1 — SA and hill climbing comparison
+Add SA and hill climbing predictions to the comparison table. Which is closest to the truth?
+
+## Exercise 2 — Why brute force misses
+Explain why the brute-force best is not exactly at the true optimum.
+
+## Exercise 3 — Bootstrap the RSM
+Fit the RSM 1000 times on bootstrap samples. What is the 95% CI for the predicted optimum pH?
+
+## Exercise 4 — Write a lab report
+In 3-4 paragraphs, summarise which method performed best and why. Discuss the trade-offs.
+
+---
+
+# Summary
+
+- The true optimum lies **between** grid points — brute force can't find it exactly.
+- RSM interpolates via a statistical model, getting much closer.
+- The "aha" moment: model-based approaches beat search-based ones for smooth surfaces.
+- **Next:** In Lesson 9, we learn SVR — a non-parametric surrogate.

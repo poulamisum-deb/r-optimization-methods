@@ -1,0 +1,151 @@
+---
+title: "Lesson 1 — Solutions (teacher copy)"
+author: "Bacterial Cellulose Production Optimization"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+Give the student `Lesson01_data_exploration.Rmd`. This file has the same six exercises with reference solutions.
+
+Remind the student: many correct solutions exist. Compare approaches, not just answers.
+
+```{r load}
+library(tidyverse)
+library(scales)
+df <- read_csv("../data/bc_full_factorial_dataset.csv", show_col_types = FALSE)
+cond_means <- df %>%
+  group_by(condition_id) %>%
+  summarise(
+    BC_yield_gL = mean(BC_yield_gL),
+    pH = first(pH), Temp_C = first(Temp_C),
+    RPM = first(RPM), Inoculum_pct = first(Inoculum_pct),
+    Sugar_gL = first(Sugar_gL),
+    .groups = "drop"
+  )
+```
+
+---
+
+## Exercise 1 — Manually average the triplicates (pure R)
+
+```{r ex1-solution}
+rows <- df %>% filter(condition_id == 2168)
+yields <- rows$BC_yield_gL
+cat("triplicates:", yields, "\n")
+
+# mean by hand
+total <- 0
+for (y in yields) {
+  total <- total + y
+}
+mean_val <- total / length(yields)
+
+# std by hand
+sq <- 0
+for (y in yields) {
+  sq <- sq + (y - mean_val)^2
+}
+std <- sqrt(sq / (length(yields) - 1))
+cat(sprintf("mean = %.3f  std = %.3f\n", mean_val, std))
+
+# R check
+cat(sprintf("R mean = %.3f  R sd = %.3f\n", mean(yields), sd(yields)))
+```
+
+---
+
+## Exercise 2 — Boolean filtering
+
+```{r ex2-solution}
+high <- df %>% filter(BC_yield_gL >= 7.0)
+cat(sprintf("%d runs reached >= 7 g/L = %.2f%% of all runs\n",
+            nrow(high), 100 * nrow(high) / nrow(df)))
+
+very_high <- df %>% filter(BC_yield_gL >= 8.0)
+cat(sprintf("%d runs reached >= 8 g/L = %.2f%% of all runs\n",
+            nrow(very_high), 100 * nrow(very_high) / nrow(df)))
+```
+
+---
+
+## Exercise 3 — Write a function
+
+```{r ex3-solution}
+mean_yield_by_level <- function(factor_name, level) {
+  df %>%
+    filter(.data[[factor_name]] == level) %>%
+    pull(BC_yield_gL) %>%
+    mean()
+}
+
+for (level in sort(unique(df$pH))) {
+  cat(sprintf("pH %s  ->  %.3f g/L\n", level, mean_yield_by_level("pH", level)))
+}
+```
+
+---
+
+## Exercise 4 — Two-factor grouping
+
+```{r ex4-solution}
+pivot <- df %>%
+  group_by(pH, Temp_C) %>%
+  summarise(mean_yield = mean(BC_yield_gL), .groups = "drop") %>%
+  arrange(desc(mean_yield))
+
+print(head(pivot, 5))
+```
+
+---
+
+## Exercise 5 — Colourful scatter plot
+
+```{r ex5-solution, fig.width=8, fig.height=5}
+ggplot(cond_means, aes(x = Temp_C, y = BC_yield_gL, colour = pH)) +
+  geom_point(size = 2, alpha = 0.7) +
+  scale_colour_viridis_c() +
+  labs(
+    x = "Temperature (°C)",
+    y = "BC yield (g/L)",
+    title = "Mean BC yield vs temperature, coloured by pH"
+  ) +
+  theme_minimal()
+
+ggsave("my_first_plot.png", width = 8, height = 5, dpi = 150)
+```
+
+---
+
+## Exercise 6 (challenge) — The same job with base R only
+
+```{r ex6-solution}
+# Read CSV with base R
+df_base <- read.csv("../data/bc_full_factorial_dataset.csv")
+
+# Group-by mean using tapply
+means_base <- tapply(df_base$BC_yield_gL, df_base$condition_id, mean)
+
+# Best condition
+best_id <- which.max(means_base)
+cat(sprintf("best condition (base R): %d, mean = %.3f g/L\n", best_id, means_base[best_id]))
+
+# Compare with tidyverse
+pandas_best <- cond_means %>% arrange(desc(BC_yield_gL)) %>% slice(1)
+cat(sprintf("best condition (tidyverse): %d, mean = %.3f g/L\n",
+            pandas_best$condition_id, pandas_best$BC_yield_gL))
+```
+
+---
+
+## Teaching notes
+
+- **Exercise 1** checks loops + the std formula; the R check is a sanity gate for the loop.
+- **Exercise 6** is deliberately 'no-tidyverse' — it forces understanding of the group-by logic that `group_by` hides. If the student finds it hard, that is exactly why the exercise exists.
+- Expected exercise 2 numbers: `>= 7` is ~16.78% of runs, `>= 8` is ~0.76% (computed from the seed-42 dataset).

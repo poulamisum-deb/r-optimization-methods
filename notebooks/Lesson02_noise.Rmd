@@ -1,0 +1,240 @@
+---
+title: "Lesson 2 — Noise-aware statistics with the BC dataset"
+author: "Bacterial Cellulose Production Optimization"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Introduction
+
+Every measurement carries noise. In Lesson 1 we averaged triplicates; now we learn **why** replication matters and **how to quantify our uncertainty**.
+
+Learning objectives:
+
+1. Compute variance, standard deviation, and standard error by hand and with R functions.
+2. Understand why triplicates give more reliable estimates than single runs.
+3. Build 95% confidence intervals and interpret them correctly.
+4. Compare two conditions with a Welch t-test.
+5. Understand the difference between standard deviation and standard error.
+
+```{r load}
+library(tidyverse)
+library(scales)
+library(viridis)
+library(car)
+df <- read_csv("../data/bc_full_factorial_dataset.csv", show_col_types = FALSE)
+```
+
+---
+
+# Why triplicates beat single runs
+
+## Simulated proof
+
+Let's take one condition and see how the estimated mean stabilises as we add replicates.
+
+```{r simulate-replicates}
+set.seed(123)
+single_condition <- df %>% filter(condition_id == 1500)
+true_mean <- mean(single_condition$BC_yield_gL)
+
+# Simulate: draw 1 to 50 random samples (with replacement) and compute running mean
+n_trials <- 50
+running_means <- numeric(n_trials)
+for (i in 1:n_trials) {
+  sample_i <- sample(single_condition$BC_yield_gL, size = i, replace = TRUE)
+  running_means[i] <- mean(sample_i)
+}
+
+sim_df <- tibble(n = 1:n_trials, mean_yield = running_means)
+
+ggplot(sim_df, aes(x = n, y = mean_yield)) +
+  geom_line(colour = "steelblue", linewidth = 0.8) +
+  geom_hline(yintercept = true_mean, linetype = "dashed", colour = "red") +
+  annotate("text", x = n_trials, y = true_mean + 0.05,
+           label = sprintf("True mean = %.3f", true_mean), hjust = 1, colour = "red") +
+  labs(x = "Number of replicates", y = "Estimated mean yield (g/L)",
+       title = "Convergence of the mean with increasing replicates") +
+  theme_minimal()
+```
+
+---
+
+# Variance, standard deviation, and standard error
+
+## By hand
+
+```{r stats-by-hand}
+yields <- c(7.9, 8.2, 8.3)
+n <- length(yields)
+
+# Mean
+mean_val <- sum(yields) / n
+cat(sprintf("Mean = %.4f\n", mean_val))
+
+# Variance (n-1 denominator for sample variance)
+variance <- sum((yields - mean_val)^2) / (n - 1)
+cat(sprintf("Variance = %.4f\n", variance))
+
+# Standard deviation
+sd_val <- sqrt(variance)
+cat(sprintf("SD = %.4f\n", sd_val))
+
+# Standard error
+se <- sd_val / sqrt(n)
+cat(sprintf("SE = %.4f\n", se))
+```
+
+## With R functions
+
+```{r stats-r}
+cat(sprintf("R mean = %.4f\n", mean(yields)))
+cat(sprintf("R var  = %.4f\n", var(yields)))
+cat(sprintf("R sd   = %.4f\n", sd(yields)))
+cat(sprintf("R SE   = %.4f\n", sd(yields) / sqrt(length(yields))))
+```
+
+---
+
+# 95% confidence intervals
+
+The 95% CI for a mean is:
+
+$$\bar{x} \pm t_{n-1,\,0.975} \cdot \frac{s}{\sqrt{n}}$$
+
+```{r confidence-interval}
+ci_95 <- function(x) {
+  n <- length(x)
+  m <- mean(x)
+  se <- sd(x) / sqrt(n)
+  t_crit <- qt(0.975, df = n - 1)
+  lower <- m - t_crit * se
+  upper <- m + t_crit * se
+  return(list(mean = m, se = se, lower = lower, upper = upper))
+}
+
+# Compute CI for condition 1500
+cond <- df %>% filter(condition_id == 1500)
+ci <- ci_95(cond$BC_yield_gL)
+cat(sprintf("Mean = %.3f g/L\n", ci$mean))
+cat(sprintf("SE = %.3f g/L\n", ci$se))
+cat(sprintf("95%% CI: [%.3f, %.3f] g/L\n", ci$lower, ci$upper))
+```
+
+---
+
+# Standard deviation vs standard error
+
+| Measure | What it tells you | Formula |
+|---------|-------------------|---------|
+| **SD** | How spread out individual measurements are | $\sqrt{\frac{\sum(x_i - \bar{x})^2}{n-1}}$ |
+| **SE** | How uncertain the *mean* estimate is | $\frac{s}{\sqrt{n}}$ |
+| **CI** | Range where the true mean likely falls | $\bar{x} \pm t \cdot SE$ |
+
+```{r sd-vs-se, fig.width=10, fig.height=5}
+cond_means <- df %>%
+  group_by(condition_id) %>%
+  summarise(
+    mean_yield = mean(BC_yield_gL),
+    sd_yield   = sd(BC_yield_gL),
+    se_yield   = sd(BC_yield_gL) / sqrt(n()),
+    pH = first(pH), Temp_C = first(Temp_C),
+    .groups = "drop"
+  ) %>%
+  head(30)
+
+p1 <- ggplot(cond_means, aes(x = reorder(factor(condition_id), mean_yield), y = mean_yield)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = mean_yield - sd_yield, ymax = mean_yield + sd_yield),
+                width = 0.3, colour = "steelblue") +
+  labs(x = "Condition ID", y = "Yield (g/L)", title = "Mean ± SD") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p2 <- ggplot(cond_means, aes(x = reorder(factor(condition_id), mean_yield), y = mean_yield)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = mean_yield - 1.96 * se_yield, ymax = mean_yield + 1.96 * se_yield),
+                width = 0.3, colour = "firebrick") +
+  labs(x = "Condition ID", y = "Yield (g/L)", title = "Mean ± 95% CI") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+library(patchwork)
+p1 + p2
+```
+
+---
+
+# Comparing two conditions: Welch t-test
+
+```{r welch-t-test}
+cond_a <- df %>% filter(condition_id == 1500)
+cond_b <- df %>% filter(condition_id == 1600)
+
+cat(sprintf("Condition 1500: mean = %.3f, sd = %.3f\n", mean(cond_a$BC_yield_gL), sd(cond_a$BC_yield_gL)))
+cat(sprintf("Condition 1600: mean = %.3f, sd = %.3f\n", mean(cond_b$BC_yield_gL), sd(cond_b$BC_yield_gL)))
+
+test <- t.test(cond_a$BC_yield_gL, cond_b$BC_yield_gL)
+cat(sprintf("\nWelch t-test:\n  t = %.3f, df = %.1f, p-value = %.4f\n",
+            test$statistic, test$parameter, test$p.value))
+cat(sprintf("95%% CI for difference: [%.3f, %.3f]\n", test$conf.int[1], test$conf.int[2]))
+```
+
+---
+
+# Exercises
+
+## Exercise 1 — Compute SE for a noisy condition
+
+Pick condition 1 (pH 4.0, 25°C, 50 RPM, 5% inoculum, 20 g/L sugar). Compute its mean, SD, SE, and 95% CI by hand (with a `for` loop), then verify with R functions.
+
+```{r ex1, eval=FALSE}
+# Your code here
+
+```
+
+## Exercise 2 — How many replicates for 0.1 g/L precision?
+
+Estimate the number of replicates needed so that the 95% CI half-width is ≤ 0.1 g/L. Use the pooled SD across all conditions as your estimate of σ.
+
+*Hint: solve `t_{n-1} * σ / sqrt(n) = 0.1` for n.*
+
+```{r ex2, eval=FALSE}
+# Your code here
+
+```
+
+## Exercise 3 — Multiple comparisons
+
+Compare condition 1500 against every other condition (1 to 3125) using Welch t-tests. How many conditions are significantly different at α = 0.05? Apply a Bonferroni correction.
+
+```{r ex3, eval=FALSE}
+# Your code here
+
+```
+
+## Exercise 4 — Error bar plot
+
+Make a bar chart of mean yield for the first 10 pH levels' conditions, with 95% CI error bars. Use `geom_col()` + `geom_errorbar()`.
+
+```{r ex4, eval=FALSE}
+# Your code here
+
+```
+
+---
+
+# Summary
+
+- **SD** quantifies measurement variability; **SE** quantifies uncertainty in the mean.
+- More replicates → smaller SE → tighter confidence intervals.
+- The Welch t-test compares two conditions without assuming equal variances.
+- **Next:** In Lesson 3, we learn brute-force search — enumerate all conditions to find the maximum.

@@ -1,0 +1,97 @@
+{
+  "design": "5^5 Full Factorial (5 factors x 5 levels, evenly spaced)",
+  "factors": {
+    "pH": {
+      "levels": [
+        4.0,
+        4.5,
+        5.0,
+        5.5,
+        6.0
+      ]
+    },
+    "Temp_C": {
+      "levels": [
+        25.0,
+        27.5,
+        30.0,
+        32.5,
+        35.0
+      ]
+    },
+    "RPM": {
+      "levels": [
+        50.0,
+        87.5,
+        125.0,
+        162.5,
+        200.0
+      ]
+    },
+    "Inoculum_pct": {
+      "levels": [
+        5.0,
+        7.5,
+        10.0,
+        12.5,
+        15.0
+      ]
+    },
+    "Sugar_gL": {
+      "levels": [
+        20.0,
+        30.0,
+        40.0,
+        50.0,
+        60.0
+      ]
+    }
+  },
+  "conditions": 3125,
+  "replicates": 3,
+  "rows": 9375,
+  "true_model": {
+    "b0": 7.5,
+    "b": {
+      "pH": 0.5,
+      "Temp_C": -0.6,
+      "RPM": -0.3,
+      "Inoculum_pct": 0.5,
+      "Sugar_gL": 0.7
+    },
+    "interactions": {
+      "pH*Temp_C": -0.45,
+      "Sugar_gL*RPM": 0.3
+    },
+    "quadratic": {
+      "pH": -0.7,
+      "Temp_C": -0.8,
+      "RPM": -0.5,
+      "Inoculum_pct": -0.6,
+      "Sugar_gL": -0.7
+    },
+    "sigma": 0.28
+  },
+  "true_optimum_coded": {
+    "pH": 0.5252,
+    "Temp_C": -0.5227,
+    "RPM": -0.1603,
+    "Inoculum_pct": 0.4167,
+    "Sugar_gL": 0.4656
+  },
+  "true_optimum_real": {
+    "pH": 5.525,
+    "Temp_C": 27.387,
+    "RPM": 112.977,
+    "Inoculum_pct": 12.083,
+    "Sugar_gL": 49.313
+  },
+  "true_optimum_yield_gL": 8.079,
+  "nearest_design_condition": {
+    "pH": 5.5,
+    "Temp_C": 27.5,
+    "RPM": 125.0,
+    "Inoculum_pct": 12.5,
+    "Sugar_gL": 50.0
+  }
+}

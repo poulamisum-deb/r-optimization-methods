@@ -1,0 +1,114 @@
+---
+title: "Lesson 2 — Solutions (teacher copy)"
+author: "Bacterial Cellulose Production Optimization"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r load}
+library(tidyverse)
+library(scales)
+df <- read_csv("../data/bc_full_factorial_dataset.csv", show_col_types = FALSE)
+```
+
+## Exercise 1 — Compute SE for condition 1
+
+```{r ex1-solution}
+cond1 <- df %>% filter(condition_id == 1)
+yields <- cond1$BC_yield_gL
+
+# By hand
+n <- length(yields)
+total <- 0
+for (y in yields) total <- total + y
+mean_val <- total / n
+
+sq <- 0
+for (y in yields) sq <- sq + (y - mean_val)^2
+sd_val <- sqrt(sq / (n - 1))
+se <- sd_val / sqrt(n)
+t_crit <- qt(0.975, df = n - 1)
+lower <- mean_val - t_crit * se
+upper <- mean_val + t_crit * se
+
+cat(sprintf("Mean = %.3f, SD = %.3f, SE = %.3f\n", mean_val, sd_val, se))
+cat(sprintf("95%% CI: [%.3f, %.3f]\n", lower, upper))
+
+# R check
+cat(sprintf("R: mean=%.3f sd=%.3f se=%.3f\n", mean(yields), sd(yields), sd(yields)/sqrt(n)))
+```
+
+## Exercise 2 — How many replicates?
+
+```{r ex2-solution}
+pooled_sd <- df %>%
+  group_by(condition_id) %>%
+  summarise(s = sd(BC_yield_gL), .groups = "drop") %>%
+  pull(s) %>%
+  mean()
+cat(sprintf("Pooled SD estimate: %.3f\n", pooled_sd))
+
+target <- 0.1
+# Solve: t_{n-1} * sigma / sqrt(n) <= 0.1
+for (n in 3:200) {
+  t_crit <- qt(0.975, df = n - 1)
+  half_width <- t_crit * pooled_sd / sqrt(n)
+  if (half_width <= target) {
+    cat(sprintf("Need n >= %d replicates (half-width = %.4f)\n", n, half_width))
+    break
+  }
+}
+```
+
+## Exercise 3 — Multiple comparisons
+
+```{r ex3-solution}
+cond1500 <- df %>% filter(condition_id == 1500)
+target_yield <- mean(cond1500$BC_yield_gL)
+
+cond_means <- df %>%
+  group_by(condition_id) %>%
+  summarise(m = mean(BC_yield_gL), .groups = "drop")
+
+results <- cond_means %>%
+  rowwise() %>%
+  mutate(
+    p_raw = t.test(
+      cond1500$BC_yield_gL,
+      df %>% filter(condition_id == cur_group()$condition_id) %>% pull(BC_yield_gL)
+    )$p.value,
+    p_bonf = min(p_raw * nrow(cond_means), 1)
+  ) %>%
+  ungroup()
+
+n_sig <- sum(results$p_bonf < 0.05)
+cat(sprintf("Significant at alpha=0.05 (Bonferroni): %d out of %d conditions\n",
+            n_sig, nrow(results)))
+```
+
+## Exercise 4 — Error bar plot
+
+```{r ex4-solution, fig.width=10, fig.height=5}
+top10 <- cond_means %>%
+  head(10) %>%
+  left_join(
+    df %>%
+      group_by(condition_id) %>%
+      summarise(se = sd(BC_yield_gL) / sqrt(n()), .groups = "drop"),
+    by = "condition_id"
+  ) %>%
+  mutate(ci95 = 1.96 * se)
+
+ggplot(top10, aes(x = factor(condition_id), y = m)) +
+  geom_col(fill = "steelblue", alpha = 0.7) +
+  geom_errorbar(aes(ymin = m - ci95, ymax = m + ci95), width = 0.2) +
+  labs(x = "Condition ID", y = "Mean yield (g/L)", title = "Top 10 conditions: Mean ± 95% CI") +
+  theme_minimal()
+```

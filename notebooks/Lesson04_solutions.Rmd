@@ -1,0 +1,94 @@
+---
+title: "Lesson 4 — Solutions (teacher copy)"
+author: "Bacterial Cellulose Production Optimization"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r load}
+library(tidyverse)
+library(viridis)
+df <- read_csv("../data/bc_full_factorial_dataset.csv", show_col_types = FALSE)
+hidden <- jsonlite::fromJSON("../data/hidden_truth.json")
+cond_stats <- df %>%
+  group_by(condition_id) %>%
+  summarise(mean_yield = mean(BC_yield_gL), sd_yield = sd(BC_yield_gL),
+            pH = first(pH), Temp_C = first(Temp_C), RPM = first(RPM),
+            Inoculum_pct = first(Inoculum_pct), Sugar_gL = first(Sugar_gL),
+            .groups = "drop")
+```
+
+## Exercise 1 — Vary the budget
+```{r ex1, fig.width=8, fig.height=5}
+set.seed(42)
+budgets <- c(10, 50, 100, 500)
+results <- list()
+for (b in budgets) {
+  best_y <- replicate(100, {
+    ids <- sample(cond_stats$condition_id, b, replace = FALSE)
+    max(cond_stats$mean_yield[cond_stats$condition_id %in% ids])
+  })
+  results[[length(results) + 1]] <- tibble(budget = b, best_yield = best_y)
+}
+bind_rows(results) %>%
+  ggplot(aes(x = factor(budget), y = best_yield)) +
+  geom_boxplot(fill = "steelblue", alpha = 0.6) +
+  labs(x = "Budget", y = "Best yield found (g/L)") +
+  theme_minimal()
+```
+
+## Exercise 2 — Greedy refinement
+```{r ex2}
+set.seed(42)
+best <- cond_stats %>% slice_sample(n = 50) %>% filter(mean_yield == max(mean_yield))
+
+# One-level neighbours
+neighbours <- cond_stats %>%
+  filter(
+    abs(pH - best$pH) <= 0.5,
+    abs(Temp_C - best$Temp_C) <= 2.5,
+    abs(RPM - best$RPM) <= 37.5,
+    abs(Inoculum_pct - best$Inoculum_pct) <= 2.5,
+    abs(Sugar_gL - best$Sugar_gL) <= 10
+  )
+refined <- neighbours %>% filter(mean_yield == max(mean_yield))
+cat(sprintf("Before refinement: %.3f\n", best$mean_yield))
+cat(sprintf("After refinement:  %.3f\n", refined$mean_yield))
+```
+
+## Exercise 3 — Measure the gap
+```{r ex3, fig.width=8, fig.height=5}
+set.seed(42)
+true_best <- max(cond_stats$mean_yield)
+budgets <- seq(10, 500, by = 10)
+gaps <- sapply(budgets, function(b) {
+  gap <- replicate(50, {
+    ids <- sample(cond_stats$condition_id, b, replace = FALSE)
+    true_best - max(cond_stats$mean_yield[cond_stats$condition_id %in% ids])
+  })
+  mean(gap)
+})
+tibble(budget = budgets, gap = gaps) %>%
+  ggplot(aes(x = budget, y = gap)) +
+  geom_line(colour = "firebrick", linewidth = 1) +
+  labs(x = "Budget", y = "Mean gap to brute-force best (g/L)",
+       title = "Gap closes with more evaluations") +
+  theme_minimal()
+```
+
+## Exercise 4 — Multiple restarts
+```{r ex4}
+set.seed(42)
+perfs <- replicate(10, {
+  ids <- sample(cond_stats$condition_id, 50, replace = FALSE)
+  max(cond_stats$mean_yield[cond_stats$condition_id %in% ids])
+})
+cat(sprintf("Best:  %.3f\n", max(perfs)))
+cat(sprintf("Worst: %.3f\n", min(perfs)))
+cat(sprintf("Median: %.3f\n", median(perfs)))
+cat(sprintf("Mean:   %.3f\n", mean(perfs)))
+```
